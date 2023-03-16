@@ -204,31 +204,328 @@ Rust has a similar set of signed / unsigned integers, boolean, char, floats that
 
 # Zero-cost abstractions
 
+You would not pay a penalty for the abstraction. It means whether you use the abstraction or instead go for the manual implementation you end up having the same costs (same speed, memory consumption etc.).
 
-# Memory management, ownership and safety
+```
+use core::mem::size_of;
+struct Enabled;
+let _ = size_of::<Enabled>();    // == 0
+```
 
+This ^ is just a demonstration of zero-cost abstraction principle that is done everywhere in Rust. Structures defined like this ^ are called Zero Sized Types, as they contain no actual data. Although these types act "real" at compile time - you can copy them, move them, take references to them, etc., however the compiler will completely strip them away.
 
-# Fearless concurrency
+In general, Rust strives to generate the same or better machine code than what you'd get if you've written it yourself. Basically, using abstractions to be more expressive do not cost you anything ABOVE what you'd have without using those abstractions.
 
 
 # Performance
 
+Because of zero-cost abstractions and rustc (compiler), in general, Rust performance is on par with C++ and even beats C in some cases.
+
+
+# Ownership model & borrow checker: Rust's most loved and hated feature
+
+## Ownership
+
+Ownership is a set of rules that govern how a Rust program manages memory. If any of the rules are violated, the program won’t compile. None of the features of ownership will slow down your program while it’s running.
+
+### Rules
+- Each value in Rust has an owner.
+- There can only be one owner at a time.
+- When the owner goes out of scope, the value will be dropped.
+
+Owner goes out of scope:
+```
+{                      // s is not valid here, it’s not yet declared
+    let s = "hello";   // s is valid from this point forward
+    // do stuff with s
+}                      // this scope is now over, and s is no longer valid
+```
+
+String value is `moved` from one owner (s1) to another owner (s2):
+```
+let s1 = String::from("hello"); //string is stored on the heap
+let s2 = s1;
+println!("{}, world!", s1);
+
+cargo run
+   Compiling ownership v0.1.0 (file:///projects/ownership)
+error[E0382]: borrow of moved value: `s1`
+ --> src/main.rs:5:28
+  |
+2 |     let s1 = String::from("hello");
+  |         -- move occurs because `s1` has type `String`, which does not implement the `Copy` trait
+3 |     let s2 = s1;
+  |              -- value moved here
+4 |
+5 |     println!("{}, world!", s1);
+  |                            ^^ value borrowed here after move
+  |
+  = note: this error originates in the macro `$crate::format_args_nl` which comes from the expansion of the macro `println` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `ownership` due to previous error
+```
+
+This would compile fine tho:
+```
+let s1 = String::from("hello");
+let s2 = s1.clone();            // clone allocates a new chunk in the heap 
+                                // and deeply copies the heap data from s1
+println!("s1 = {}, s2 = {}", s1, s2);
+```
+
+Stack data - copies stack data by default:
+```
+let x = 5;
+let y = x; // compiler copies any thing that has `Copy` trait 
+           // implemented incl. integers, so stack data for `x` 
+           // is copied into `y` by default (no need to call x.copy() or x.clone())
+println!("x = {}, y = {}", x, y);
+```
+
+Functions:
+```
+fn main() {
+    let s = String::from("hello");  // s comes into scope
+
+    takes_ownership(s);             // s's value moves into the function...
+                                    // ... and so is no longer valid here
+                                    // if we tried to use s after the call to takes_ownership, 
+                                    // Rust would throw a compile-time error.
+
+    let x = 5;                      // x comes into scope
+
+    makes_copy(x);                  // x would move into the function,
+                                    // but i32 is Copy, so it's okay to still
+                                    // use x afterward
+
+} // Here, x goes out of scope, then s. But because s's value was moved, nothing
+  // special happens.
+
+fn takes_ownership(some_string: String) { // some_string comes into scope
+    println!("{}", some_string);
+} // Here, some_string goes out of scope and `drop` is called. The backing
+  // memory is freed.
+
+fn makes_copy(some_integer: i32) { // some_integer comes into scope
+    println!("{}", some_integer);
+} // Here, some_integer goes out of scope. Nothing special happens.
+```
+
+## References and borrowing
+
+A reference is like a pointer in that it’s an address we can follow to access the data stored at that address; that data is owned by some other variable. Unlike a pointer, a reference is guaranteed to point to a valid value of a particular type for the life of that reference.
+
+References allow you to refer to some value without taking ownership of it. Because a reference does not own the data, the value it points to will not be dropped when the reference is destroyed.
+
+```
+fn main() {
+    let s1 = String::from("hello");
+    let len = calculate_length(&s1);  // &s1 is an immutable reference to s1
+    println!("The length of '{}' is {}.", s1, len);
+}
+
+fn calculate_length(s: &String) -> usize {
+    s.len()
+}
+```
+
+We call the action of creating a reference borrowing. As in real life, if a person owns something, you can borrow it from them. When you’re done, you have to give it back. You don’t own it.
+
+So, what happens if we try to modify something we’re borrowing?
+```
+fn main() {
+    let s = String::from("hello");
+
+    change(&s);
+}
+
+fn change(some_string: &String) {
+    some_string.push_str(", world");
+}
+
+$ cargo run
+   Compiling ownership v0.1.0 (file:///projects/ownership)
+error[E0596]: cannot borrow `*some_string` as mutable, as it is behind a `&` reference
+ --> src/main.rs:8:5
+  |
+7 | fn change(some_string: &String) {
+  |                        ------- help: consider changing this to be a mutable reference: `&mut String`
+8 |     some_string.push_str(", world");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `some_string` is a `&` reference, so the data it refers to cannot be borrowed as mutable
+
+For more information about this error, try `rustc --explain E0596`.
+error: could not compile `ownership` due to previous error
+```
+
+This one works:
+```
+fn main() {
+    let mut s = String::from("hello");
+
+    change(&mut s);
+}
+
+fn change(some_string: &mut String) {
+    some_string.push_str(", world");
+}
+```
+
+However:
+```
+ let mut s = String::from("hello");
+
+let r1 = &mut s;
+let r2 = &mut s;
+
+println!("{}, {}", r1, r2);
+
+
+$ cargo run
+   Compiling ownership v0.1.0 (file:///projects/ownership)
+error[E0499]: cannot borrow `s` as mutable more than once at a time
+ --> src/main.rs:5:14
+  |
+4 |     let r1 = &mut s;
+  |              ------ first mutable borrow occurs here
+5 |     let r2 = &mut s;
+  |              ^^^^^^ second mutable borrow occurs here
+6 |
+7 |     println!("{}, {}", r1, r2);
+  |                        -- first borrow later used here
+
+For more information about this error, try `rustc --explain E0499`.
+error: could not compile `ownership` due to previous error
+```
+
+The restriction preventing multiple mutable references to the same data at the same time allows for mutation but in a very controlled fashion. It’s something that new Rustaceans struggle with because most languages let you mutate whenever you’d like. The benefit of having this restriction is that Rust can prevent data races at compile time. A data race is similar to a race condition and happens when these three behaviors occur:
+- Two or more pointers access the same data at the same time.
+- At least one of the pointers is being used to write to the data.
+- There’s no mechanism being used to synchronize access to the data.
+
+Data races cause undefined behavior and can be difficult to diagnose and fix when you’re trying to track them down at runtime; Rust prevents this problem by refusing to compile code with data races!
+
+As always, we can use curly brackets to create a new scope, allowing for multiple mutable references, just not simultaneous ones:
+```
+let mut s = String::from("hello");
+
+{
+    let r1 = &mut s;
+} // r1 goes out of scope here, so we can make a new reference with no problems.
+
+let r2 = &mut s;
+```
+
+Rust enforces a similar rule for combining mutable and immutable references. This code results in an error:
+```
+let mut s = String::from("hello");
+
+let r1 = &s; // no problem
+let r2 = &s; // no problem
+let r3 = &mut s; // BIG PROBLEM
+
+println!("{}, {}, and {}", r1, r2, r3);
+
+
+$ cargo run
+   Compiling ownership v0.1.0 (file:///projects/ownership)
+error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immutable
+ --> src/main.rs:6:14
+  |
+4 |     let r1 = &s; // no problem
+  |              -- immutable borrow occurs here
+5 |     let r2 = &s; // no problem
+6 |     let r3 = &mut s; // BIG PROBLEM
+  |              ^^^^^^ mutable borrow occurs here
+7 |
+8 |     println!("{}, {}, and {}", r1, r2, r3);
+  |                                -- immutable borrow later used here
+
+For more information about this error, try `rustc --explain E0502`.
+error: could not compile `ownership` due to previous error
+
+```
+
+## Dangling references
+
+In languages with pointers, it’s easy to erroneously create a dangling pointer — a pointer that references a location in memory that may have been given to someone else — by freeing some memory while preserving a pointer to that memory. In Rust, by contrast, the compiler guarantees that references will never be dangling references: if you have a reference to some data, the compiler will ensure that the data will not go out of scope before the reference to the data does.
+
+Let’s try to create a dangling reference to see how Rust prevents them with a compile-time error:
+```
+fn main() {
+    let reference_to_nothing = dangle();
+}
+
+fn dangle() -> &String { // dangle returns a reference to a String
+    let s = String::from("hello"); // s is a new String
+
+    &s // we return a reference to the String, s
+} // Here, s goes out of scope, and is dropped. Its memory goes away.
+  // Danger!
+
+
+$ cargo run
+   Compiling ownership v0.1.0 (file:///projects/ownership)
+error[E0106]: missing lifetime specifier
+ --> src/main.rs:5:16
+  |
+5 | fn dangle() -> &String {
+  |                ^ expected named lifetime parameter
+  |
+  = help: this function's return type contains a borrowed value, but there is no value for it to be borrowed from
+help: consider using the `'static` lifetime
+  |
+5 | fn dangle() -> &'static String {
+  |                 +++++++
+
+For more information about this error, try `rustc --explain E0106`.
+error: could not compile `ownership` due to previous error
+```
+
+## References rules
+- At any given time, you can have either one mutable reference or any number of immutable references.
+- References must always be valid.
+
+
+# Memory safety
+
+In safe Rust, which is what you use by default:
+- It is not possible to dereference a null pointer.
+- It is not possible to use a dangling pointer.
+- It is not possible to forget to free memory.
+- It is not possible to free already-freed memory.
+
+There is also `unsafe` Rust that you could [opt-in to when needed](https://doc.rust-lang.org/nomicon/intro.html), but that's a different story
+
+
+# Thread Safety
+
+Rust's type system prevents data races at compile time (Send and Sync traits).
+You can't read and write the same variable from multiple threads at the same time without wrapping it in a lock or other concurrency primitive. That'd introduce a data race bug and the compiler won't allow it.
+You can't forget to acquire a lock before accessing the variable it protects.
+
 
 # Backward compatibility
+
 Release of Rust 1.0 in 2015 established stability without stagnation principle. The rule for Rust has been that once a feature has been released on stable, compiler team is committed to supporting that feature for ALL future releases.
 If breaking change is needed it is released as an `Edition` which is opt-in. So nothing breaks unless you explicitly migrate and opt-in into a new edition.
+
 See more here: https://doc.rust-lang.org/edition-guide/editions/index.html
 
 
 # Tools
+
 Rust provides compiler, build system and package manager (cargo) once default installation is done.
 Cargo includes support for unit testing out of the box (no need for complex setup - just write unit tests in code and run via `cargo test`).
+
 There is support for Rust in various IDEs, Visual Studio Code being one of the most favorited by community.
 Additionally one can install rustfmt (linter with default rules), clippy (advisor for idiomatic code), cargodoc (for generating documentation) etc.
+
 See more here https://www.rust-lang.org/tools
 
 
 # Platform support
+
 Rust compiler supports a lot of platforms as an output target. 
 In theory, anything LLVM supports Rust can support too.
 See more here https://doc.rust-lang.org/rustc/platform-support.html
@@ -264,10 +561,12 @@ There is undocumented/unofficial `@_cdecl` compiler directive in Swift that woul
 
 # How to learn Rust
 
-Start with [The Rust Programming Language](https://doc.rust-lang.org/book/) and go from there.
-Use exercises in the book to get familiar with the language.
+Start with [The Rust Programming Language](https://doc.rust-lang.org/book/) and go from there. Use exercises in the book to get familiar with the language.
+
 Explore [Rust By Example](https://doc.rust-lang.org/stable/rust-by-example/).
+
 Do the [Rustlings exercises to get used to reading and writing Rust](https://github.com/rust-lang/rustlings/).
+
 Then, as always, go build something.
 
 
@@ -284,3 +583,4 @@ Comments and questions are welcome. I'm not an expert in this field and could ma
 - https://doc.rust-lang.org/book/ch16-00-concurrency.html
 - https://blog.rust-lang.org/2014/10/30/Stability.html
 - https://faq.sealedabstract.com/rust/
+- https://doc.rust-lang.org/nomicon/intro.html
