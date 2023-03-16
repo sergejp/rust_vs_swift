@@ -266,6 +266,8 @@ There is undocumented/unofficial `@_cdecl` compiler directive in Swift that woul
 
 Start with [The Rust Programming Language](https://doc.rust-lang.org/book/) and go from there.
 Use exercises in the book to get familiar with the language.
+Explore [Rust By Example](https://doc.rust-lang.org/stable/rust-by-example/).
+Do the [Rustlings exercises to get used to reading and writing Rust](https://github.com/rust-lang/rustlings/).
 Then, as always, go build something.
 
 
